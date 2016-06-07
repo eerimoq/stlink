@@ -1,3 +1,6 @@
+Building with MinGW
+===================
+
 from dandev37:
 
 Here's a step by step from a clean install to successfully setup MinGW and build

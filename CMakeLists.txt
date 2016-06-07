@@ -2,12 +2,61 @@ project(stlink C)
 cmake_minimum_required(VERSION 2.8.7)
 
 include(CheckCCompilerFlag)
-find_package(PkgConfig)
 
 set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH};${CMAKE_SOURCE_DIR}/cmake/modules")
 
+# Determine package version.
+find_package (Git)
+if (DEFINED ENV{TRAVIS_TAG})
+    set (STLINK_PACKAGE_VERSION "$ENV{TRAVIS_TAG}")
+elseif (GIT_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
+    # Working off a git repo, using git versioning
+
+    # Check if HEAD is pointing to a tag
+    execute_process (
+        COMMAND             "${GIT_EXECUTABLE}" name-rev --name-only --tags HEAD
+        WORKING_DIRECTORY   "${PROJECT_SOURCE_DIR}"
+        OUTPUT_VARIABLE     STLINK_PACKAGE_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+   if ("${STLINK_PACKAGE_VERSION}" STREQUAL "undefined")
+     execute_process (
+        COMMAND             "${GIT_EXECUTABLE}" describe --abbrev=0 --tags
+        WORKING_DIRECTORY   "${PROJECT_SOURCE_DIR}"
+        OUTPUT_VARIABLE     STLINK_PACKAGE_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+     execute_process (
+        COMMAND             "${GIT_EXECUTABLE}" rev-parse --short HEAD
+        WORKING_DIRECTORY   "${PROJECT_SOURCE_DIR}"
+        OUTPUT_VARIABLE     STLINK_PACKAGE_HASH
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+        set (STLINK_PACKAGE_VERSION "${STLINK_PACKAGE_VERSION}-${STLINK_PACKAGE_HASH}-dev")
+    endif ()
+
+    # If the sources have been changed locally, add -dirty to the version.
+    execute_process (
+        COMMAND             "${GIT_EXECUTABLE}" diff --quiet
+        WORKING_DIRECTORY   "${PROJECT_SOURCE_DIR}"
+        RESULT_VARIABLE     res)
+    if (res EQUAL 1)
+        set (STLINK_PACKAGE_VERSION "${STLINK_PACKAGE_VERSION}-dirty")
+    endif()
+
+elseif (EXISTS ${PROJECT_SOURCE_DIR}/.version)
+    #  If git is not available (e.g. when building from source package)
+    #  we can extract the package version from .version file.
+    file (STRINGS .version STLINK_PACKAGE_VERSION)
+else ()
+    set (STLINK_PACKAGE_VERSION "Unknown")
+endif()
+
 find_package(LibUSB REQUIRED)
-pkg_check_modules(gtk gtk+-3.0)
+if (NOT APPLE)
+	find_package(PkgConfig)
+	pkg_check_modules(gtk gtk+-3.0)
+endif ()
 
 function(add_cflag_if_supported flag)
     string(REPLACE "-" "_" flagclean ${flag})
@@ -39,13 +88,20 @@ add_cflag_if_supported("-Wredundant-decls")
 add_cflag_if_supported("-Wundef")
 add_cflag_if_supported("-fPIC")
 
+if (CMAKE_BUILD_TYPE STREQUAL "")
+	set (CMAKE_BUILD_TYPE "Debug")
+endif ()
+
 if(${CMAKE_BUILD_TYPE} MATCHES "Debug")
 	include(CTest)
 	add_cflag_if_supported("-ggdb")
 	add_cflag_if_supported("-O0")
+	set (STLINK_PACKAGE_VERSION "${STLINK_PACKAGE_VERSION}-debug")
 elseif()
 	add_cflag_if_supported("-O2")
 endif()
+
+message("Building ${PROJECT_NAME} ${STLINK_PACKAGE_VERSION}")
 
 set(STLINK_HEADERS
 	include/stlink.h
@@ -108,20 +164,22 @@ if(NOT MINGW)
           RUNTIME DESTINATION bin)
 endif()
 
-if(gtk_FOUND)
+if (NOT APPLE AND gtk_FOUND)
   include_directories(SYSTEM ${gtk_INCLUDE_DIRS})
   set(GUI_SOURCES src/tools/gui/stlink-gui.c
                   src/tools/gui/stlink-gui.h)
 
+  # TODO REMOVE whole stlink-gui-local target, fixup auto-search of ui file in implementation
   add_executable(stlink-gui-local ${GUI_SOURCES})
   set_target_properties(stlink-gui-local PROPERTIES
                         COMPILE_FLAGS -DSTLINK_UI_DIR=\\"${CMAKE_CURRENT_SOURCE_DIR}/gui\\")
   target_link_libraries(stlink-gui-local stlink ${gtk_LDFLAGS})
 
-  set(INSTALLED_UI_DIR ${CMAKE_INSTALL_PREFIX}/share)
+  set(INSTALLED_UI_DIR share/stlink)
   add_executable(stlink-gui ${GUI_SOURCES})
+  # TODO REMOVE, fixup auto-search of ui file in implementation
   set_target_properties(stlink-gui PROPERTIES
-                        COMPILE_FLAGS -DSTLINK_UI_DIR=\\"${INSTALLED_UI_DIR}\\")
+                        COMPILE_FLAGS -DSTLINK_UI_DIR=\\"${CMAKE_INSTALL_PREFIX}/${INSTALLED_UI_DIR}\\")
   target_link_libraries(stlink-gui stlink ${gtk_LDFLAGS})
 
   install(TARGETS stlink-gui
@@ -131,3 +189,16 @@ if(gtk_FOUND)
 endif()
 
 add_subdirectory(tests)
+
+set (CPACK_PACKAGE_NAME ${PROJECT_NAME})
+set (CPACK_PACKAGE_VERSION ${STLINK_PACKAGE_VERSION})
+set (CPACK_SOURCE_GENERATOR "TBZ2;ZIP")
+set (CPACK_SOURCE_IGNORE_FILES "/build/;/.git/;~$;${CPACK_SOURCE_IGNORE_FILES}")
+set (CPACK_SOURCE_PACKAGE_FILE_NAME "${PROJECT_NAME}-${STLINK_PACKAGE_VERSION}")
+if (APPLE)
+	set(CPACK_GENERATOR "ZIP")
+	file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/dist/osx")
+	set(CPACK_OUTPUT_FILE_PREFIX "${CMAKE_BINARY_DIR}/dist/osx")
+endif ()
+add_custom_target(dist COMMAND ${CMAKE_MAKE_PROGRAM} package_source)
+include (CPack)
