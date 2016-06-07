@@ -6,7 +6,7 @@ include(CheckCCompilerFlag)
 set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH};${CMAKE_SOURCE_DIR}/cmake/modules")
 
 # Determine package version.
-find_package (Git)
+find_package (Git QUIET)
 if (DEFINED ENV{TRAVIS_TAG})
     set (STLINK_PACKAGE_VERSION "$ENV{TRAVIS_TAG}")
 elseif (GIT_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
@@ -14,12 +14,13 @@ elseif (GIT_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
 
     # Check if HEAD is pointing to a tag
     execute_process (
-        COMMAND             "${GIT_EXECUTABLE}" name-rev --name-only --tags HEAD
+        COMMAND             "${GIT_EXECUTABLE}" describe --abbrev=0 --tags --exact-match
         WORKING_DIRECTORY   "${PROJECT_SOURCE_DIR}"
         OUTPUT_VARIABLE     STLINK_PACKAGE_VERSION
+	RESULT_VARIABLE     res
         OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-   if ("${STLINK_PACKAGE_VERSION}" STREQUAL "undefined")
+   if (res NOT EQUAL 0)
      execute_process (
         COMMAND             "${GIT_EXECUTABLE}" describe --abbrev=0 --tags
         WORKING_DIRECTORY   "${PROJECT_SOURCE_DIR}"
